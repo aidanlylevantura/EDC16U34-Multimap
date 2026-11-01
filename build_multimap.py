@@ -1,83 +1,63 @@
-import os
+"""Build the EDC16U34 3-slot multimap (v1.2).
+Usage: python build_multimap.py [stock.ori] [output.bin]
+Requires generate_thunk.py (and keystone-engine) alongside."""
+import os, struct, sys
+import generate_thunk as gt
 
-# --- CONFIGURATION ---
-STOCK_FILE = r"C:\Users\user\Documents\Complete ECU Disassembly\stock_382083.ori"
-OUTPUT_FILE = r"C:\Users\user\Documents\Complete ECU Disassembly\EDC16U34-Multimap-Release\03G906021KH_382083_MULTIMAP_BUILT.bin"
+STOCK_FILE  = sys.argv[1] if len(sys.argv) > 1 else "stock_382083.ori"
+OUTPUT_FILE = sys.argv[2] if len(sys.argv) > 2 else "03G906021KH_382083_MULTIMAP_v1.2.bin"
 
-# The FINAL 184-byte safety-gated PowerPC thunk
-THUNK_HEX = "3D60007F616B95BCA18B0000280C00C8418100683D600070616B501CA18B0000558C0463418200443D60007F616B9211898B00002C0C00014182004039800001998B00003D60007F616B9210898B0000398C00012C0C00034180000839800000998B0000480000143D60007F616B921139800000998B00003D60007F616B9210898B00002C0C0001418200182C0C00024182001C3CA0001D60A516F64BE9D0103CA0001E60A5B0004BE9D0043CA0001E60A5C0004BE9CFF8"
+HOOK_ADDR, HOOK_ORIG = 0x09B2A8, bytes.fromhex("38BF017E")   # addi r5,r31,382
+STOCK_MAP, SLOT1, SLOT2 = gt.SLOT_PTRS
+TARGET = 0xD01FE500
+REGIONS = [(0x040000, 0x17FFFF), (0x180000, 0x1BFFFF), (0x1C0000, 0x1FDFFF)]  # csum word = last 4 bytes
 
-def get_sum(data, start_addr, end_addr):
-    total = 0
-    for i in range(start_addr, end_addr + 1, 4):
-        word = int.from_bytes(data[i:i+4], "big")
-        total = (total + word) & 0xFFFFFFFF
-    return total
+def get_sum(d, a, b):
+    t = 0
+    for i in range(a, b + 1, 4):
+        t = (t + int.from_bytes(d[i:i+4], "big")) & 0xFFFFFFFF
+    return t
 
-def fix_checksums(data):
-    target = 0xD01FE500
-    regions = [
-        (0x040000, 0x17FFFF, 0x17FFFC),
-        (0x180000, 0x1BFFFF, 0x1BFFFC),
-        (0x1C0000, 0x1FDFFF, 0x1FDFFC)
-    ]
-    print("\n[*] Fixing FADECAFE Checksums...")
-    for start, end, csum_off in regions:
-        current_sum = get_sum(data, start, end)
-        if current_sum == target:
-            print(f"  Region 0x{start:06X} already valid.")
-            continue
-            
-        delta = (target - current_sum) & 0xFFFFFFFF
-        old_csum = int.from_bytes(data[csum_off:csum_off+4], "big")
-        new_csum = (old_csum + delta) & 0xFFFFFFFF
-        data[csum_off:csum_off+4] = new_csum.to_bytes(4, "big")
-        print(f"  Region 0x{start:06X}-0x{end:06X} fixed. Delta: 0x{delta:08X}")
+def b_insn(src, dst):          # plain relative branch, LK=0
+    off = dst - src
+    assert off % 4 == 0 and -0x2000000 <= off < 0x2000000
+    return (0x48000000 | (off & 0x03FFFFFC)).to_bytes(4, "big")
 
 def main():
-    if not os.path.exists(STOCK_FILE):
-        print(f"[-] Stock file not found: {STOCK_FILE}")
-        return
+    data = bytearray(open(STOCK_FILE, "rb").read())
+    assert len(data) == 0x200000, "stock must be exactly 2 MB"
+    assert data[HOOK_ADDR:HOOK_ADDR+4] == HOOK_ORIG, "unexpected instruction at hook - wrong SW?"
+    assert get_sum(data, 0x040000, 0x17FFFF) == TARGET, "stock checksums not valid"
 
-    print(f"[*] Loading {STOCK_FILE}...")
-    with open(STOCK_FILE, "rb") as f:
-        data = bytearray(f.read())
+    # map size from its own header: nx, ny, axes, nx*ny halfword data
+    nx, ny = struct.unpack(">HH", data[STOCK_MAP:STOCK_MAP+4])
+    map_len = 2 * (2 + nx + ny + nx * ny)
+    assert (nx, ny) == (4, 20) and map_len == 0xD4, f"map header unexpected: {nx}x{ny}"
+    print(f"[*] Stock map {nx}x{ny} -> {map_len:#x} bytes")
 
-    if len(data) != 0x200000:
-        print("[-] File must be exactly 2MB.")
-        return
+    thunk, n = gt.assemble()
+    for addr, ln in ((SLOT1, map_len), (SLOT2, map_len), (gt.THUNK_ADDR, len(thunk))):
+        assert data[addr:addr+ln] == b"\xFF" * ln, f"{addr:#x} not erased in stock"
+    m = bytes(data[STOCK_MAP:STOCK_MAP+map_len])
+    data[SLOT1:SLOT1+map_len] = m
+    data[SLOT2:SLOT2+map_len] = m
+    data[gt.THUNK_ADDR:gt.THUNK_ADDR+len(thunk)] = thunk
+    print(f"[+] Slots at {SLOT1:#x}/{SLOT2:#x}, thunk {len(thunk)} bytes at {gt.THUNK_ADDR:#x}")
 
-    # 1. Clone the Maps
-    print("\n[*] Cloning Maps to Empty Flash...")
-    map_length = 0x400 
-    stock_map = data[0x1D16F6:0x1D16F6+map_length]
-    
-    data[0x1EB000:0x1EB000+map_length] = stock_map
-    print("  [+] Slot 1 injected at 0x1EB000")
-    
-    data[0x1EC000:0x1EC000+map_length] = stock_map
-    print("  [+] Slot 2 injected at 0x1EC000")
+    data[HOOK_ADDR:HOOK_ADDR+4] = b_insn(HOOK_ADDR, gt.THUNK_ADDR)
+    print(f"[+] Hook {data[HOOK_ADDR:HOOK_ADDR+4].hex().upper()}")
 
-    # 2. Inject the Thunk
-    print("\n[*] Injecting Map Redirect Thunk...")
-    thunk_bytes = bytes.fromhex(THUNK_HEX)
-    data[0x1FE200:0x1FE200+len(thunk_bytes)] = thunk_bytes
-    print(f"  [+] Thunk injected at 0x1FE200 ({len(thunk_bytes)} bytes)")
+    for a, b in REGIONS:
+        cs = b - 3
+        delta = (TARGET - get_sum(data, a, b)) & 0xFFFFFFFF
+        if delta:
+            old = int.from_bytes(data[cs:cs+4], "big")
+            data[cs:cs+4] = ((old + delta) & 0xFFFFFFFF).to_bytes(4, "big")
+        assert get_sum(data, a, b) == TARGET
+        print(f"[+] Region {a:#08x}-{b:#08x} OK (delta {delta:#010x})")
 
-    # 3. Patch the OS Hook
-    print("\n[*] Patching OS Hook at 0x09B2A8...")
-    hook_bytes = bytes.fromhex("48162F59")
-    data[0x09B2A8:0x09B2A8+4] = hook_bytes
-    print("  [+] Hook patched.")
-
-    # 4. Fix Checksums
-    fix_checksums(data)
-
-    # 5. Save
-    print(f"\n[*] Saving to {OUTPUT_FILE}...")
-    with open(OUTPUT_FILE, "wb") as f:
-        f.write(data)
-    print("[+] Multimap Build Complete!")
+    open(OUTPUT_FILE, "wb").write(data)
+    print(f"[+] Wrote {OUTPUT_FILE}")
 
 if __name__ == "__main__":
     main()

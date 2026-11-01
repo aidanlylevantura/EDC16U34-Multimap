@@ -1,51 +1,42 @@
-import os
+"""Verify a multimap build against stock.
+Usage: python sanity_check_build.py [stock.ori] [multimap.bin]"""
+import sys
+ORIG = sys.argv[1] if len(sys.argv) > 1 else "stock_382083.ori"
+MOD  = sys.argv[2] if len(sys.argv) > 2 else "03G906021KH_382083_MULTIMAP_v1.2.bin"
+TARGET = 0xD01FE500
+REGIONS = [(0x040000, 0x17FFFF), (0x180000, 0x1BFFFF), (0x1C0000, 0x1FDFFF)]
+# expected change blocks: (start, length, description)
+EXPECTED = [(0x09B2A8, 4, "hook"), (0x17FFFC, 4, "csum region 1"),
+            (0x1EB000, 0xD4, "slot 1"), (0x1EC000, 0xD4, "slot 2"),
+            (0x1FDFFC, 4, "csum region 3"), (0x1FE200, 184, "thunk")]
 
-# Original stock file
-ORIG = r"C:\Users\user\Documents\Complete ECU Disassembly\stock_382083.ori"
-# Your exact v3 Multimap Candidate
-MULTIMAP = r"C:\Users\user\Documents\Complete ECU Disassembly\03G906021KH_382083_MULTIMAP_v3_R1_CANSTALK_CANDIDATE.bin"
-TARGET_CONSTANT = 0xD01FE500
+def get_sum(d, a, b):
+    t = 0
+    for i in range(a, b + 1, 4):
+        t = (t + int.from_bytes(d[i:i+4], "big")) & 0xFFFFFFFF
+    return t
 
-def get_sum(data, start_addr, end_addr):
-    total = 0
-    for i in range(start_addr, end_addr + 1, 4):
-        word = int.from_bytes(data[i:i+4], "big")
-        total = (total + word) & 0xFFFFFFFF
-    return total
-
-def main():
-    if not os.path.exists(MULTIMAP):
-        print(f"[-] Cannot find {MULTIMAP}")
-        return
-    if not os.path.exists(ORIG):
-        print(f"[-] Cannot find original file at {ORIG}")
-        return
-
-    orig_data = open(ORIG, "rb").read()
-    mod_data = open(MULTIMAP, "rb").read()
-
-    print("=== 1. Diff Check ===")
-    changes = 0
-    for i in range(min(len(orig_data), len(mod_data))):
-        if orig_data[i] != mod_data[i]:
-            if changes < 15: # Print first 15 changes
-                print(f"  Byte changed at 0x{i:06X}: {orig_data[i]:02X} -> {mod_data[i]:02X}")
-            changes += 1
-    print(f"Total bytes changed: {changes}")
-
-    print("\n=== 2. Inner Checksum Verification ===")
-    for offset in [0x1BFF74, 0x1FDF78]:
-        orig_word = orig_data[offset:offset+4].hex().upper()
-        mod_word = mod_data[offset:offset+4].hex().upper()
-        match = "OK" if orig_word == mod_word else "MISMATCH! (May cause boot failure)"
-        print(f"  0x{offset:06X}: Orig {orig_word} | Mod {mod_word} [{match}]")
-
-    print("\n=== 3. Outer FADECAFE Sum Verification ===")
-    for start, end, csum_off in [(0x180000, 0x1BFFFF, 0x1BFFFC), (0x1C0000, 0x1FDFFF, 0x1FDFFC)]:
-        mod_sum = get_sum(mod_data, start, end)
-        match = "OK" if mod_sum == TARGET_CONSTANT else "FAILED (Run edc16_fix_checksum.py)"
-        print(f"  Region 0x{start:06X}-0x{end:06X}: Sum = 0x{mod_sum:08X} [{match}]")
-        print(f"    Checksum word at 0x{csum_off:06X}: {mod_data[csum_off:csum_off+4].hex().upper()}")
-
-if __name__ == "__main__":
-    main()
+o, m = open(ORIG, "rb").read(), open(MOD, "rb").read()
+ok = len(o) == len(m) == 0x200000
+print("size 2 MB:", ok)
+changed = {i for i in range(len(o)) if o[i] != m[i]}
+allowed = {i for s, l, _ in EXPECTED for i in range(s, s + l)}
+stray = sorted(changed - allowed)
+print("changed bytes:", len(changed), "| outside expected blocks:", len(stray))
+if stray: print("  first stray:", hex(stray[0])); ok = False
+for s, l, name in EXPECTED:
+    n = sum(1 for i in range(s, s + l) if o[i] != m[i])
+    print(f"  {name:14s} {s:#08x} +{l:#x}: {n} bytes differ")
+hook = m[0x9B2A8:0x9B2AC]
+lk = hook[3] & 1
+print("hook", hook.hex().upper(), "-> plain b" if (hook[0] == 0x48 and not lk) else "-> NOT a plain b (LK set or wrong opcode)")
+ok &= hook[0] == 0x48 and not lk
+print("slot 1 == stock map:", m[0x1EB000:0x1EB0D4] == o[0x1D16F6:0x1D16F6+0xD4],
+      "| slot 2:", m[0x1EC000:0x1EC0D4] == o[0x1D16F6:0x1D16F6+0xD4])
+for a, b in REGIONS:
+    s = get_sum(m, a, b); good = s == TARGET; ok &= good
+    print(f"checksum {a:#08x}-{b:#08x}: {s:#010x} [{'OK' if good else 'FAIL'}]")
+for off in (0x1BFF74, 0x1FDF78):
+    same = o[off:off+4] == m[off:off+4]
+    print(f"inner const {off:#08x}: {m[off:off+4].hex().upper()} [{'unchanged' if same else 'CHANGED'}]")
+print("\nRESULT:", "PASS" if ok else "FAIL")

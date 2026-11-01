@@ -1,76 +1,19 @@
-\# EDC16U34 3-Slot Switchable Multimap (v1.1.1)
+# EDC16U34 3-Slot Switchable Multimap (v1.2)
 
+Target: Bosch EDC16U34, VAG 03G906021KH, SW 382083 (Golf Mk5 1.9 TDI).
 
+## How it works
+- **Hook:** at `0x09B2A8` the stock `addi r5,r31,382` (`38BF017E`) is replaced by a plain branch (`48162F58`) to a 184-byte thunk at `0x1FE200`. The thunk sets r5 to the selected map and branches back to `0x09B2AC`.
+- **Map:** 4x20 two-axis map, 0xD4 bytes (size read from its own header). Slot 0 stock `0x1D16F6`, slot 1 `0x1EB000`, slot 2 `0x1EC000`. Slots 1 and 2 are exact copies of stock until you edit them.
+- **Pedal gate:** reads s16 at `0x7F95C4` (`-0x6A2C(r13)`, r13 = `0x7FFFF0`); switching only when value <= 200 (`PEDAL_MAX`). The scale of this value is NOT verified.
+- **Stalk:** reads byte `0x7FF122` bit 0 (CAN 0x38A byte 2). NOT confirmed on hardware. Edge-detected with latch `0x7F9211`; slot state in `0x7F9210` (0 -> 1 -> 2 -> 0).
+- Registers used: r5, r11, r12 only (r11/r12 are dead after the hook).
 
-This repository contains the final, fully open-source 3-slot switchable multimap for the Bosch EDC16U34 ECU (VW Golf 5 / Seat Leon, VAG 03G906021KH, SW 382083).
+## Files
+- `generate_thunk.py` - assembles the thunk (needs `keystone-engine`); all addresses are constants at the top.
+- `build_multimap.py` - `python build_multimap.py stock_382083.ori out.bin`; asserts stock hook bytes, erased target areas and map header, then fixes the 3 checksums.
+- `sanity_check_build.py` - `python sanity_check_build.py stock_382083.ori out.bin`; diff must touch only the 6 expected blocks, hook must be a plain `b`, all 3 checksums = `0xD01FE500`.
+- `edc16_fix_checksum.py` - standalone checksum fixer.
 
-
-
-The patch intercepts the map pointer immediately before the 2D interpolation engine and redirects it based on the Cruise Control stalk.
-
-
-
-\## How It Works (v1.1.1 Features)
-
-
-
-\- \*\*The Hook\*\*: At `0x09B2A8`, the stock instruction `addi r5, r31, 382` is replaced with a branch to custom PowerPC assembly injected at `0x1FE200`.
-
-\- \*\*Pedal Safety Gate\*\*: The custom code reads the Accelerator Pedal position from RAM (`0x7F95BC`). Map switching is strictly locked out unless the pedal is at 0% (under 1% raw value), preventing dangerous torque spikes mid-acceleration.
-
-\- \*\*CAN Stalk Edge-Detection\*\*: The code reads the raw stalk CAN payload at RAM (`0x70501C`). It looks for a press of the SET button (Bit 14) and uses a state latch (`0x7F9211`) to prevent rapid-fire switching if the button is held down.
-
-\- \*\*The Slots\*\*:
-
-&#x20; - \*\*Slot 0 (Stock)\*\*: `0x1D16F6`
-
-&#x20; - \*\*Slot 1 (Stage 1)\*\*: `0x1EB000`
-
-&#x20; - \*\*Slot 2 (Eco)\*\*: `0x1EC000`
-
-
-
-\## Included Files
-
-
-
-\- `03G906021KH\_382083\_MULTIMAP\_BUILT.bin` — The final 2 MB binary, ready to flash (Checksums validated to `0xD01FE500`).
-
-\- `build\_multimap.py` — The Python builder that clones the maps, injects the 184-byte thunk, patches the hook, and fixes the checksums.
-
-\- `generate\_thunk.py` — The Keystone-based Python assembler that generates the final PowerPC logic.
-
-\- `edc16\_fix\_checksum.py` — The script used to fix the three FADECAFE checksum regions.
-
-
-
-\## Flashing Instructions
-
-
-
-\*\*You cannot flash this over OBD/CAN.\*\* The EDC16U34 bootloader uses an RSA-1024 signature for the `0x33` finish command. Because the private key is not in the external flash dump, OBD flashing will fail.
-
-
-
-You must use a \*\*BDM tool\*\* (K-TAG, BDM100, PCMFlash) to physically write `03G906021KH\_382083\_MULTIMAP\_BUILT.bin` to the external flash chip.
-
-
-
-\## Important Safety Warning
-
-
-
-Do not flash the patched binary to a daily-driven vehicle without bench testing first. 
-
-
-
-Before vehicle deployment:
-
-1\. Connect a BDM probe to a spare EDC16U34 ECU.
-
-2\. Flash `03G906021KH\_382083\_MULTIMAP\_BUILT.bin` via BDM.
-
-3\. Verify the FADECAFE checksums.
-
-4\. Only install in the car after successful bench validation.
-
+## Flashing
+OBD/CAN flashing is not possible (RSA-signed finish command). A BDM tool is required. Bench-test on a spare ECU first and verify checksums before installing in a car.
