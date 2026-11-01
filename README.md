@@ -1,4 +1,4 @@
-\# EDC16U34 3-Slot Switchable Multimap (v1.1.0)
+\# EDC16U34 3-Slot Switchable Multimap (v1.1.1)
 
 
 
@@ -10,7 +10,7 @@ The patch intercepts the map pointer immediately before the 2D interpolation eng
 
 
 
-\## How It Works (v1.1.0 Features)
+\## How It Works (v1.1.1 Features)
 
 
 
