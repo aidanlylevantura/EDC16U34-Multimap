@@ -17,3 +17,17 @@ Target: Bosch EDC16U34, VAG 03G906021KH, SW 382083 (Golf Mk5 1.9 TDI).
 
 ## Flashing
 OBD/CAN flashing is not possible (RSA-signed finish command). A BDM tool is required. Bench-test on a spare ECU first and verify checksums before installing in a car.
+
+## Validation and Emulation
+
+This build (v1.2.0) has undergone rigorous static analysis and PowerPC emulation:
+
+*   **Thunk Emulation:** The 184-byte assembly thunk was tested in a PowerPC emulator across 14 scenarios (slot cycling, button latching, safety gates, negative pedal values). All passed.
+*   **Register Safety:** Verified that the callee at `0xF94DC` does not read `r11` or `r12`, so clobbering them in the thunk is safe.
+*   **Hook:** Confirmed the hook is a plain `b` (Branch) to preserve the Link Register. The stock instruction was `38BF017E`.
+*   **r13 Base Pointer:** Confirmed via the Leon bootloader that `r13` is initialized to `0x7FFFF0` (`lis r13, 0x0080` / `addi r13, r13, -0x10`). Therefore, the pedal address `-0x6A2C(r13)` is exactly `0x7F95C4`.
+*   **Checksums:** All three FADECAFE regions sum perfectly to `0xD01FE500`. The build changes exactly 620 bytes, all within expected blocks.
+
+**Remaining Hardware Validation Needed:**
+*   The stalk CAN byte at `0x7FF122` (requires live CAN capture).
+*   The pedal threshold scale (`PEDAL_MAX = 200`).
