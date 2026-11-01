@@ -1,40 +1,34 @@
-"""Assemble the EDC16U34 multimap thunk (v1.2). Requires: pip install keystone-engine"""
 from keystone import Ks, KS_ARCH_PPC, KS_MODE_PPC32, KS_MODE_BIG_ENDIAN
 
-THUNK_ADDR = 0x1FE200
-RETURN_ADDR = 0x09B2AC          # instruction after the hook
-PEDAL_ADDR = 0x7F95C4           # -0x6A2C(r13), r13 = 0x7FFFF0 (s16)
-PEDAL_MAX = 200                 # switching allowed only at/below this raw value (scale UNVERIFIED)
-STALK_ADDR = 0x7FF122           # CAN 0x38A byte 2, bit 0 (UNCONFIRMED on hardware)
-STALK_MASK = 0x01
-ACTIVE_SLOT = 0x7F9210
-LAST_STALK = 0x7F9211
-SLOT_PTRS = (0x1D16F6, 0x1EB000, 0x1EC000)   # stock, slot 1, slot 2
-
-def lo(a): return a & 0xFFFF
-def hi(a): return (a >> 16) & 0xFFFF
-
-def source():
-    return f"""
-    lis 11, {hi(PEDAL_ADDR):#x}
-    ori 11, 11, {lo(PEDAL_ADDR):#x}
+THUNK1_ASM = """
+    # Pedal Safety Gate (0x007F95C4)
+    lis 11, 0x007F
+    ori 11, 11, 0x95C4
     lha 12, 0(11)
-    cmpwi 0, 12, {PEDAL_MAX}
+    cmplwi 0, 12, 0x00C8
     bgt 0, use_current_map
-    lis 11, {hi(STALK_ADDR):#x}
-    ori 11, 11, {lo(STALK_ADDR):#x}
+
+    # Read Stalk State (0x007FF122)
+    lis 11, 0x007F
+    ori 11, 11, 0xF122
     lbz 12, 0(11)
-    andi. 12, 12, {STALK_MASK}
+    rlwinm. 12, 12, 0, 24, 24
     beq 0, stalk_released
-    lis 11, {hi(LAST_STALK):#x}
-    ori 11, 11, {lo(LAST_STALK):#x}
+
+    # Check LastStalk (0x007F9211)
+    lis 11, 0x007F
+    ori 11, 11, 0x9211
     lbz 12, 0(11)
     cmpwi 0, 12, 1
     beq 0, use_current_map
+
+    # Edge detected
     li 12, 1
     stb 12, 0(11)
-    lis 11, {hi(ACTIVE_SLOT):#x}
-    ori 11, 11, {lo(ACTIVE_SLOT):#x}
+
+    # Increment ActiveSlot (0x007F9210)
+    lis 11, 0x007F
+    ori 11, 11, 0x9210
     lbz 12, 0(11)
     addi 12, 12, 1
     cmpwi 0, 12, 3
@@ -43,38 +37,75 @@ def source():
 save_slot:
     stb 12, 0(11)
     b use_current_map
+
 stalk_released:
-    lis 11, {hi(LAST_STALK):#x}
-    ori 11, 11, {lo(LAST_STALK):#x}
+    lis 11, 0x007F
+    ori 11, 11, 0x9211
     li 12, 0
     stb 12, 0(11)
+
 use_current_map:
-    lis 11, {hi(ACTIVE_SLOT):#x}
-    ori 11, 11, {lo(ACTIVE_SLOT):#x}
+    lis 11, 0x007F
+    ori 11, 11, 0x9210
     lbz 12, 0(11)
     cmpwi 0, 12, 1
-    beq 0, slot1
+    beq 0, slot1_map
     cmpwi 0, 12, 2
-    beq 0, slot2
-    lis 5, {hi(SLOT_PTRS[0]):#x}
-    ori 5, 5, {lo(SLOT_PTRS[0]):#x}
-    b {RETURN_ADDR:#x}
-slot1:
-    lis 5, {hi(SLOT_PTRS[1]):#x}
-    ori 5, 5, {lo(SLOT_PTRS[1]):#x}
-    b {RETURN_ADDR:#x}
-slot2:
-    lis 5, {hi(SLOT_PTRS[2]):#x}
-    ori 5, 5, {lo(SLOT_PTRS[2]):#x}
-    b {RETURN_ADDR:#x}
+    beq 0, slot2_map
+
+slot0_map:
+    addi 5, 31, 382
+    b 0x09B2AC
+
+slot1_map:
+    lis 5, 0x001E
+    ori 5, 5, 0xB000
+    b 0x09B2AC
+
+slot2_map:
+    lis 5, 0x001E
+    ori 5, 5, 0xC000
+    b 0x09B2AC
 """
 
-def assemble():
+THUNK2_ASM = """
+    # Read ActiveSlot (0x007F9210) - no edge detection, no increment
+    lis 11, 0x007F
+    ori 11, 11, 0x9210
+    lbz 12, 0(11)
+    cmpwi 0, 12, 1
+    beq 0, slot1_map
+    cmpwi 0, 12, 2
+    beq 0, slot2_map
+
+slot0_map:
+    addi 4, 31, 382
+    b 0x0B973C
+
+slot1_map:
+    lis 4, 0x001E
+    ori 4, 4, 0xB000
+    b 0x0B973C
+
+slot2_map:
+    lis 4, 0x001E
+    ori 4, 4, 0xC000
+    b 0x0B973C
+"""
+
+def assemble(asm, addr):
     ks = Ks(KS_ARCH_PPC, KS_MODE_PPC32 | KS_MODE_BIG_ENDIAN)
-    enc, n = ks.asm(source(), addr=THUNK_ADDR)
-    return bytes(enc), n
+    encoding, count = ks.asm(asm, addr=addr)
+    return "".join(f"{b:02X}" for b in encoding), len(encoding), count
+
+def main():
+    h1, n1, c1 = assemble(THUNK1_ASM, 0x1FE200)
+    h2, n2, c2 = assemble(THUNK2_ASM, 0x1FE400)
+    print(f"THUNK1: {c1} instr, {n1} bytes")
+    print(f"THUNK2: {c2} instr, {n2} bytes")
+    print()
+    print(f'THUNK1_HEX = "{h1}"')
+    print(f'THUNK2_HEX = "{h2}"')
 
 if __name__ == "__main__":
-    enc, n = assemble()
-    print(f"{n} instructions, {len(enc)} bytes")
-    print(f'THUNK_HEX = "{enc.hex().upper()}"')
+    main()
