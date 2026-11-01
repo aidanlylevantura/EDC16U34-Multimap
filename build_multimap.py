@@ -1,13 +1,12 @@
 import os
 
 # --- CONFIGURATION ---
+# Update this path if your stock file is located elsewhere
 STOCK_FILE = r"C:\Users\user\Documents\Complete ECU Disassembly\stock_382083.ori"
-OUTPUT_FILE = r"C:\Users\user\Documents\Complete ECU Disassembly\03G906021KH_382083_MULTIMAP_BUILT.bin"
+OUTPUT_FILE = r"C:\Users\user\Documents\Complete ECU Disassembly\EDC16U34-Multimap-Release\03G906021KH_382083_MULTIMAP_BUILT.bin"
 
-# The hex bytes for your custom assembly thunk (the map switcher)
-# If you have the exact hex from your v3 build, paste it here. 
-# For now, this is a placeholder that just returns the stock map pointer.
-THUNK_HEX = "38A0017E4E800020" 
+# The generated PowerPC assembly thunk from keystone-engine
+THUNK_HEX = "3D607F95616B00C4A18B0000280C1388418100203D607F92616B0010898B00002C0C0001418200182C0C00024182001C3CA01D1660A500F64BE9D0743CA01EB060A500004BE9D0683CA01EC060A500004BE9D05C"
 
 def get_sum(data, start_addr, end_addr):
     total = 0
@@ -19,10 +18,11 @@ def get_sum(data, start_addr, end_addr):
 def fix_checksums(data):
     target = 0xD01FE500
     regions = [
+        (0x040000, 0x17FFFF, 0x17FFFC),
         (0x180000, 0x1BFFFF, 0x1BFFFC),
         (0x1C0000, 0x1FDFFF, 0x1FDFFC)
     ]
-    print("\n[*] Fixing Checksums...")
+    print("\n[*] Fixing FADECAFE Checksums...")
     for start, end, csum_off in regions:
         current_sum = get_sum(data, start, end)
         if current_sum == target:
@@ -38,6 +38,7 @@ def fix_checksums(data):
 def main():
     if not os.path.exists(STOCK_FILE):
         print(f"[-] Stock file not found: {STOCK_FILE}")
+        print("[-] Please ensure stock_382083.ori is in the correct folder.")
         return
 
     print(f"[*] Loading {STOCK_FILE}...")
@@ -49,11 +50,7 @@ def main():
         return
 
     # 1. Clone the Maps
-    # Copy the Torque Limiter Map (Header at 0x1D16F6, data at 0x1D172A)
-    # We'll copy a 0x400 byte chunk starting from 0x1D16F6
     print("\n[*] Cloning Maps to Empty Flash...")
-    
-    # Stock map structure starts at 0x1D16F6
     map_length = 0x400 
     stock_map = data[0x1D16F6:0x1D16F6+map_length]
     
@@ -65,18 +62,16 @@ def main():
     data[0x1EC000:0x1EC000+map_length] = stock_map
     print("  [+] Slot 2 injected at 0x1EC000")
 
-    # 2. Inject the Thunk (Assembly)
+    # 2. Inject the Thunk
     print("\n[*] Injecting Map Redirect Thunk...")
     thunk_bytes = bytes.fromhex(THUNK_HEX)
-    # We inject at 0x1FE200
     data[0x1FE200:0x1FE200+len(thunk_bytes)] = thunk_bytes
     print(f"  [+] Thunk injected at 0x1FE200 ({len(thunk_bytes)} bytes)")
 
-    # 3. Patch the Hook
+    # 3. Patch the OS Hook
     print("\n[*] Patching OS Hook at 0x09B2A8...")
     # Original: addi r5, r31, 382 (0x38BF017E)
-    # New: bl 0x1FE200 (0x4BFFF959) - The offset is calculated as (0x1FE200 - 0x09B2A8) / 4 = 0x162F58
-    # Opcode: 48 (bl) | 0x162F58 = 0x48162F58 (Wait, earlier we verified 0x48162F59)
+    # New: bl 0x1FE200 (0x48162F59)
     hook_bytes = bytes.fromhex("48162F59")
     data[0x09B2A8:0x09B2A8+4] = hook_bytes
     print("  [+] Hook patched.")
