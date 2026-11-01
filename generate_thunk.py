@@ -1,8 +1,8 @@
 from keystone import Ks, KS_ARCH_PPC, KS_MODE_PPC32, KS_MODE_BIG_ENDIAN
 
 assembly = """
-    # 1. Pedal Safety Gate (0% requirement)
-    lis 11, 0x7F95
+    # 1. Pedal Safety Gate (0x007F95BC)
+    lis 11, 0x007F
     ori 11, 11, 0x95BC
     lhz 12, 0(11)      # Read pedal position
     cmplwi 0, 12, 0x00C8   # Compare with ~1% (200 decimal)
@@ -15,9 +15,9 @@ assembly = """
     rlwinm. 12, 12, 0, 17, 17 # Extract bit 14 (0x4000) and set CR0
     beq 0, stalk_released   # If not pressed, go to stalk_released
 
-    # 3. If SET is pressed, check LastStalk (0x7F9211) to avoid continuous switching
-    lis 11, 0x7F92
-    ori 11, 11, 0x11
+    # 3. Check LastStalk (0x007F9211)
+    lis 11, 0x007F
+    ori 11, 11, 0x9211
     lbz 12, 0(11)      # Read LastStalk
     cmpwi 0, 12, 1
     beq 0, use_current_map  # If already processed, do nothing
@@ -26,9 +26,9 @@ assembly = """
     li 12, 1
     stb 12, 0(11)
 
-    # 5. Increment ActiveSlot (0x7F9210) (0 -> 1 -> 2 -> 0)
-    lis 11, 0x7F92
-    ori 11, 11, 0x10
+    # 5. Increment ActiveSlot (0x007F9210) (0 -> 1 -> 2 -> 0)
+    lis 11, 0x007F
+    ori 11, 11, 0x9210
     lbz 12, 0(11)      # Read ActiveSlot
     addi 12, 12, 1
     cmpwi 0, 12, 3
@@ -40,15 +40,15 @@ save_slot:
 
 stalk_released:
     # 6. Button released. Update LastStalk = 0
-    lis 11, 0x7F92
-    ori 11, 11, 0x11
+    lis 11, 0x007F
+    ori 11, 11, 0x9211
     li 12, 0
     stb 12, 0(11)
 
 use_current_map:
     # 7. Load Map Pointer based on ActiveSlot
-    lis 11, 0x7F92
-    ori 11, 11, 0x10
+    lis 11, 0x007F
+    ori 11, 11, 0x9210
     lbz 12, 0(11)
     cmpwi 0, 12, 1
     beq 0, stage1_map
@@ -56,18 +56,18 @@ use_current_map:
     beq 0, eco_map
 
 stock_map:
-    lis 5, 0x1D16
-    ori 5, 5, 0xF6
+    lis 5, 0x001D
+    ori 5, 5, 0x16F6
     b 0x09B2AC
 
 stage1_map:
-    lis 5, 0x1EB0
-    ori 5, 5, 0x0000
+    lis 5, 0x001E
+    ori 5, 5, 0xB000
     b 0x09B2AC
 
 eco_map:
-    lis 5, 0x1EC0
-    ori 5, 5, 0x0000
+    lis 5, 0x001E
+    ori 5, 5, 0xC000
     b 0x09B2AC
 """
 
