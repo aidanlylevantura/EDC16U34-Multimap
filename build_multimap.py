@@ -1,12 +1,11 @@
 import os
 
 # --- CONFIGURATION ---
-# Update this path if your stock file is located elsewhere
 STOCK_FILE = r"C:\Users\user\Documents\Complete ECU Disassembly\stock_382083.ori"
 OUTPUT_FILE = r"C:\Users\user\Documents\Complete ECU Disassembly\EDC16U34-Multimap-Release\03G906021KH_382083_MULTIMAP_BUILT.bin"
 
-# The generated PowerPC assembly thunk from keystone-engine
-THUNK_HEX = "3D607F95616B00C4A18B0000280C1388418100203D607F92616B0010898B00002C0C0001418200182C0C00024182001C3CA01D1660A500F64BE9D0743CA01EB060A500004BE9D0683CA01EC060A500004BE9D05C"
+# The FINAL 184-byte safety-gated PowerPC thunk
+THUNK_HEX = "3D607F95616B95BCA18B0000280C00C8418100683D600070616B501CA18B0000558C0463418200443D607F92616B0011898B00002C0C00014182004039800001998B00003D607F92616B0010898B0000398C00012C0C00034180000839800000998B0000480000143D607F92616B001139800000998B00003D607F92616B0010898B00002C0C0001418200182C0C00024182001C3CA01D1660A500F64BE9D0103CA01EB060A500004BE9D0043CA01EC060A500004BE9CFF8"
 
 def get_sum(data, start_addr, end_addr):
     total = 0
@@ -38,7 +37,6 @@ def fix_checksums(data):
 def main():
     if not os.path.exists(STOCK_FILE):
         print(f"[-] Stock file not found: {STOCK_FILE}")
-        print("[-] Please ensure stock_382083.ori is in the correct folder.")
         return
 
     print(f"[*] Loading {STOCK_FILE}...")
@@ -54,11 +52,9 @@ def main():
     map_length = 0x400 
     stock_map = data[0x1D16F6:0x1D16F6+map_length]
     
-    # Slot 1 (Stage 1) at 0x1EB000
     data[0x1EB000:0x1EB000+map_length] = stock_map
     print("  [+] Slot 1 injected at 0x1EB000")
     
-    # Slot 2 (Eco) at 0x1EC000
     data[0x1EC000:0x1EC000+map_length] = stock_map
     print("  [+] Slot 2 injected at 0x1EC000")
 
@@ -70,8 +66,6 @@ def main():
 
     # 3. Patch the OS Hook
     print("\n[*] Patching OS Hook at 0x09B2A8...")
-    # Original: addi r5, r31, 382 (0x38BF017E)
-    # New: bl 0x1FE200 (0x48162F59)
     hook_bytes = bytes.fromhex("48162F59")
     data[0x09B2A8:0x09B2A8+4] = hook_bytes
     print("  [+] Hook patched.")
