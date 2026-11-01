@@ -1,27 +1,60 @@
 from keystone import Ks, KS_ARCH_PPC, KS_MODE_PPC32, KS_MODE_BIG_ENDIAN
 
-# We use relative branches (b) and pass the base address (0x1FE200) 
-# to Keystone so it calculates the jump offsets correctly.
-
 assembly = """
-    # 1. Pedal Safety Gate
+    # 1. Pedal Safety Gate (0% requirement)
     lis 11, 0x7F95
-    ori 11, 11, 0xC4
-    lhz 12, 0(11)
-    cmplwi 0, 12, 0x1388
-    bgt 0, stock_map
+    ori 11, 11, 0x95BC
+    lhz 12, 0(11)      # Read pedal position
+    cmplwi 0, 12, 0x00C8   # Compare with ~1% (200 decimal)
+    bgt 0, use_current_map  # If pedal > 1%, force use current map
 
-    # 2. Read Active Slot
+    # 2. Read Stalk State from CAN buffer (0x0070501C)
+    lis 11, 0x0070
+    ori 11, 11, 0x501C
+    lhz 12, 0(11)      # Read stalk state
+    rlwinm. 12, 12, 0, 17, 17 # Extract bit 14 (0x4000) and set CR0
+    beq 0, stalk_released   # If not pressed, go to stalk_released
+
+    # 3. If SET is pressed, check LastStalk (0x7F9211) to avoid continuous switching
+    lis 11, 0x7F92
+    ori 11, 11, 0x11
+    lbz 12, 0(11)      # Read LastStalk
+    cmpwi 0, 12, 1
+    beq 0, use_current_map  # If already processed, do nothing
+
+    # 4. Button edge detected! Update LastStalk = 1
+    li 12, 1
+    stb 12, 0(11)
+
+    # 5. Increment ActiveSlot (0x7F9210) (0 -> 1 -> 2 -> 0)
+    lis 11, 0x7F92
+    ori 11, 11, 0x10
+    lbz 12, 0(11)      # Read ActiveSlot
+    addi 12, 12, 1
+    cmpwi 0, 12, 3
+    blt 0, save_slot
+    li 12, 0            # Wrap around to 0
+save_slot:
+    stb 12, 0(11)
+    b use_current_map
+
+stalk_released:
+    # 6. Button released. Update LastStalk = 0
+    lis 11, 0x7F92
+    ori 11, 11, 0x11
+    li 12, 0
+    stb 12, 0(11)
+
+use_current_map:
+    # 7. Load Map Pointer based on ActiveSlot
     lis 11, 0x7F92
     ori 11, 11, 0x10
     lbz 12, 0(11)
-
     cmpwi 0, 12, 1
     beq 0, stage1_map
     cmpwi 0, 12, 2
     beq 0, eco_map
 
-    # 3. Load Map Pointers
 stock_map:
     lis 5, 0x1D16
     ori 5, 5, 0xF6
@@ -41,10 +74,7 @@ eco_map:
 def generate_thunk():
     try:
         ks = Ks(KS_ARCH_PPC, KS_MODE_PPC32 | KS_MODE_BIG_ENDIAN)
-        
-        # Pass the base address so relative branches calculate correctly
         encoding, count = ks.asm(assembly, addr=0x1FE200)
-        
         hex_string = "".join([f"{byte:02X}" for byte in encoding])
         
         print(f"Successfully assembled {count} instructions.")
