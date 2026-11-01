@@ -1,0 +1,10 @@
+*.csv
+*.ols
+Flash.bin
+Proc.bin
+Eeprom.bin
+*Original_Eeprom*
+Thumbs.db
+desktop.ini
+__pycache__/
+*.pyc
