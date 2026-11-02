@@ -1,0 +1,7 @@
+# Binaries (Do not commit large .bin files)
+binaries/*.bin
+*.bin
+
+# Python
+__pycache__/
+*.pyc

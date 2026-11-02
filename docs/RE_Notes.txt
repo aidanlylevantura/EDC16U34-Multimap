@@ -1,0 +1,11 @@
+====================================================
+MULTIMAP REVERSE ENGINEERING NOTES (EDC16U34)
+====================================================
+Switchable Map Count: 25
+Main Reader Hook: 0x0F94DC
+SOI Pointer Hook: 0x0C0454
+ActiveSlot RAM: 0x7F9210
+Pedal Gate RAM: 0x7F95C4 (Foot off pedal < 200)
+CAN Buffer: 0x7FF120 (J527 0x38A)
+Checksums: OS/Cal1/Cal2 all balance to 0xD01FE500
+====================================================
