@@ -3,7 +3,7 @@
 ## Project Overview
 I created this repository to document and distribute the 3-slot switchable multimap I engineered for the Bosch EDC16U34 (VAG 03G906021KH / SW 382083), found in the 2006-2007 VW Golf Mk5 1.9 TDI PD (BXE engine). 
 
-This `v2.0.0` I designed this specific build to prove the map-switching architecture on physical hardware before applying any performance tune data. Because every cloned map is byte-identical to the factory stock file, the car will run exactly as it did from the showroom floor. This eliminates any risk of engine damage during the initial hardware test.
+This `v2.0.0` I designed this specific build to prove the map-switching architecture on physical hardware before applying any performance tune data. Because every cloned map is byte-identical to the factory stock file. This eliminates any risk of engine damage during the initial hardware test.
 
 ## The Engineering Challenge
 When I started this project, standard tuning practices suggested I could simply swap a base pointer or patch 30+ individual map loads. However, after reverse-engineering the OS, I discovered two massive roadblocks:
