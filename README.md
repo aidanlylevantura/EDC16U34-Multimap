@@ -3,7 +3,7 @@
 ## Project Overview
 I created this repository to document and distribute the 3-slot switchable multimap I engineered for the Bosch EDC16U34 (VAG 03G906021KH / SW 382083), found in the 2006-2007 VW Golf Mk5 1.9 TDI PD (BXE engine). 
 
-This `v2.0.0` release is a **100% safe, all-stock test binary**. I designed this specific build to prove the map-switching architecture on physical hardware before applying any performance tune data. Because every cloned map is byte-identical to the factory stock file, the car will run exactly as it did from the showroom floor. This eliminates any risk of engine damage during the initial hardware test.
+This `v2.0.0` I designed this specific build to prove the map-switching architecture on physical hardware before applying any performance tune data. Because every cloned map is byte-identical to the factory stock file, the car will run exactly as it did from the showroom floor. This eliminates any risk of engine damage during the initial hardware test.
 
 ## The Engineering Challenge
 When I started this project, standard tuning practices suggested I could simply swap a base pointer or patch 30+ individual map loads. However, after reverse-engineering the OS, I discovered two massive roadblocks:
@@ -67,10 +67,9 @@ I wrote `tools/validate_build.py` to mathematically prove the safety of every bu
 
 ## Hardware Deployment Protocol
 1. Flash `binaries/03G906021KH_382083_MULTIMAP_v2.0.0.bin` to the ECU via BDM (Do not use OBD; the RSA 0x33 check is still active).
-2. Reseal the ECU with neutral-cure silicone (e.g., Victor Reinz Reinzosil).
-3. Start the car. It will idle perfectly with zero DTCs.
-4. With your foot off the pedal, press the stalk SET button. 
-5. Using VCDS or a CAN logger, verify `ActiveSlot` (`0x7F9210`) cycles `0` -> `1` -> `2` -> `0`.
+2. Start the car. It will idle perfectly with zero DTCs.
+3. With your foot off the pedal, press the stalk SET button. 
+4. Using VCDS or a CAN logger, verify `ActiveSlot` (`0x7F9210`) cycles `0` -> `1` -> `2` -> `0`.
 
 ## Next Steps (Phase 1c)
 Once Phase 1b is proven on the physical hardware, I will move to Phase 1c:
