@@ -1,0 +1,4 @@
+# Keep every clone byte-identical so SHA256SUMS.txt verifies on any platform.
+* text=auto eol=lf
+*.bin binary
+*.csv -text
