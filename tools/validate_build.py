@@ -430,7 +430,7 @@ def main():
             crbad |= (h.c.cr & 0x0FFFFFFF) != (b0[1] & 0x0FFFFFFF) or (h.c.xer, h.c.ctr, h.c.lr) != (b0[2], b0[3], b0[4])
             if h.c.g[5] != e5 or h.c.g[10] != e10:
                 bad.append((hex(word), hex(r5), hex(h.c.g[5]), hex(e5)))
-    check(f"reader thunk redirects exactly the 14 headers in slot 1/2, nothing else, stock for slot 0/invalid ({cnt} cases)", not bad, str(bad[:2]))
+    check(f"reader thunk redirects exactly the {len(HEADERS)} headers in slot 1/2, nothing else, stock for slot 0/invalid ({cnt} cases)", not bad, str(bad[:2]))
     check("reader thunk: displaced lha replayed with the final r5; only r5,r10,r11,r12 + CR0 touched; CR1-7/LR/CTR/XER intact",
           chg <= {5, 10, 11, 12} and not crbad, f"changed r{sorted(chg)}")
     cmpw_count = sum(1 for a in range(THUNK_READER, THUNK_READER + WIN["READER"], 4) if u32(mod, a) == 0x7C055840)  # 0x7C055840 = cmplw r5,r11
