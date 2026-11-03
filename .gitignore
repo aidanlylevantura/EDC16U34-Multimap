@@ -1,7 +1,57 @@
-# Binaries (Do not commit large .bin files)
-binaries/*.bin
+# Firmware images are third-party (Bosch/VAG) material, not covered by this
+# licence, and are distributed for reference/development on your own ECU only.
+# All .bin files are ignored by default so unrelated reads/dumps can never be
+# committed by accident; the release images below are the only exceptions.
 *.bin
+!binaries/Stock_Baseline.bin
+!binaries/03G906021KH_MultiMap_v2.0.1.bin
+!binaries/03G906021KH_MultiMap_v2.0.1_INERT.bin
+
+*.hex
+*.s19
+*.mot
+*.ori
+*.rom
+
+# WinOLS / tuner working files (keep only the exported mappack CSV)
+*.xlsm
+*.xlsx
+*.kp
+*.winolsskript
+*.ols
+
+# Build and scratch output
+out/
+build/
+tmp/
+*.tmp
+*.log
+
+# Old releases kept locally
+V1/
+archive/
 
 # Python
 __pycache__/
-*.pyc
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# Editors and OS
+.vscode/
+.idea/
+*.swp
+*~
+Thumbs.db
+desktop.ini
+.DS_Store
+
+# Archives
+*.zip
+*.7z
+*.rar
+*.tar
+*.gz
