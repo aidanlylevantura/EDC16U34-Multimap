@@ -1,0 +1,77 @@
+====================================================
+MULTIMAP REVERSE ENGINEERING NOTES (EDC16U34)  -  v2.1.0 current
+VAG 03G906021KH / SW 1037382083
+Stock_Baseline.bin = complete read (OS from VAG_BOSCH_EDC16U34_EXT FLASH_20261102134010.bin)
+                    + factory calibration (03G906021KH_9245_382083_PD105 Stock.Bin)
+====================================================
+SWITCHED (current design)
+  12 x 2D maps through the reader hook 0x0F94DC:
+    Boost 1 0x1E470C   Boost 2 0x1E4884
+    Driver Wish 1..6 0x1C2370 0x1C24C6 0x1C261C 0x1C2772 0x1C28C8 0x1C2A1E
+    Torque Limiter 0x1D16F6        Smoke Limiter Pressure 0x1D333C
+    Smoke Limiter Airflow 0x1D307E  Boost Limiter 0x1E49FC
+  10 x SOI maps as one block: OS pointer-table index 267, 0x1D6414..0x1D82B0
+    (includes the Soi Selector at 0x1D75EE)
+  6 x Duration maps + Duration Selector + InjVCD parameters as one block:
+    0x1DF02E..0x1DFC5E  (clone 0xC30 bytes per slot)
+
+HOOKS
+  0x09B2A8  addi r5,r31,382   -> TL/stalk thunk 0x1FC000
+  0x0F94DC  lha r10,0(r5)     -> reader thunk 0x1FC400 (12 header compares)
+  0x0C0898  lwz r12,1068(r15) -> SOI thunk 0x1FC800
+  0x0C09F8  lwz r30,1068(r15) -> SOI thunk 0x1FC880
+  18 DOI base loads (r15[286..289]) -> thunks 0x1FC900 + i*0x60:
+    0xC5108 0xC53A0 0xC56FC 0xC57E8 0xC5AC4 0xC5D50   (r15[286] = 0x1DF02E)
+    0xC5634 0xC58D4 0xC595C 0xC5BC8 0xC5E3C 0xC5F54
+    0xC60E0 0xC6188 0xC61C0 0xE3124                    (r15[287] = 0x1DF046)
+    0xC5FE0                                             (r15[288] = 0x1DF04E)
+    0xC6244                                             (r15[289] = 0x1DF054)
+
+DURATION (DOI) PATH - why the reader list is 8, not 14
+  At 0xC6244 the code loads r15[289] = 0x1DF054 and builds six pointers:
+    +0x1A  -> 0x1DF06E Dur00     +0x10E -> 0x1DF162 Dur01
+    +0x390 -> 0x1DF3E4 Dur02     +0x612 -> 0x1DF666 Dur03
+    +0x894 -> 0x1DF8E8 Dur04     +0xB16 -> 0x1DFB6A Dur05
+  stored as a pointer array on the stack. The Duration maps are therefore NOT
+  passed to 0xF94DC and never match a reader header; they are selected by
+  InjVlv_numMI1_CUR (0x1DF062), a 6-point curve indexed by SOI angle.
+  Clone base 0x1F4000 (slot1) / 0x1F6000 (slot2) maps 0x1DF02E, so the six
+  computed pointers land in the slot's copy. Slot table at 0x1F3F00.
+
+SELECTORS (A2L)
+  Soi Selector 0x1D75EE, 10 points, value factor 1/256
+    axis "Temp", Deg C, factor 0.1, offset -273, data 0x1D75DA
+    -20..72 C -> map 0..9   (SOI map 08 and 09 are identical in stock)
+  Duration Selector 0x1DF062, 6 points, value factor 1/256
+    axis "Crankshaft Angle" (= SOI angle), factor 0.023437, data 0x1DF056
+    0, 4, 22, 30, 30, 24 deg -> maps 3, 2, 1, 0, 1, 0
+
+STATE (r13 = 0x7FFFF0)
+  0x7F9214 u32 = 0xA5C35A3C ^ slot  authoritative, single aligned store
+  0x7F9210 u8 mirror, 0x7F9211 u8 SET edge latch, 0x7F95C4 s16 pedal
+  v2.1.0: 0x7F9413 switch-contact byte, bit selected by MAPS_MASK_NEXT/PREV
+          (defaults 0x80 / 0x40), gated on 0x7F953A == 0 via MAPS_CFG bit0.
+          MAPS_SRC at 0x1EA7CB selects the source byte:
+            0 = 0x7F9413 (contacts)   1 = 0x7F9990 high byte (rocker)
+            2 = 0x7F935D (rocker mode)
+          The old 0x7FF122 / CAN 0x38A entry was WRONG - no cruise code reads it.
+
+MEMORY
+  free run 0x1EA7C8..0x1FDF73; tail block 0x1FDF74+ untouched
+  12 map clones  0x1F0000 / 0x1F2000   4004 B per slot
+  SOI clones     0x1EB000 / 0x1ED000   0x1E9C B
+  DOI clones     0x1F4000 / 0x1F6000   0xC30 B
+  slot table     0x1F3F00
+  thunks         0x1FC000..0x1FCFC0
+
+CHECKSUMS
+  additive, balance words 0x17FFFC / 0x1BFFFC / 0x1FDFFC, target 0xD01FE500
+  runtime verifier tables (FA DE CA FE) cover 0x4D284..0x52804 and
+  0x1C1938..0x1C1D18 only, untouched by this build
+  chained 136-byte tail blocks unresolved and left unchanged
+
+VALIDATION
+  validate_build.py        71/71 active, 65/65 inert (all 3 MAPS_SRC paths)
+  validate_doi_path.py     51/51 (Duration pointers resolve into each slot clone)
+  builder writes no map data: every map byte equals the source bin
+====================================================
