@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-validate_build.py  (v2.0.1)  -  structural + behavioural validation of a MultiMap build.
+validate_build.py  (v2.1.0)  -  structural + behavioural validation of a MultiMap build.
 
 Usage:  python validate_build.py [stock.bin] [built.bin] [--inert]
         defaults: Stock_Baseline.bin and 03G906021KH_382083_MULTIMAP_v2_0_1.bin next to this script.
@@ -24,7 +24,7 @@ INERT = "--inert" in sys.argv
 HERE = os.path.dirname(os.path.abspath(__file__))
 STOCK_FILE = ARGS[0] if len(ARGS) > 0 else os.path.join(HERE, "..", "binaries", "Stock_Baseline.bin")
 MOD_FILE = ARGS[1] if len(ARGS) > 1 else os.path.join(
-    HERE, "..", "binaries", "03G906021KH_MultiMap_v2.0.1" + ("_INERT" if INERT else "") + ".bin")
+    HERE, "..", "binaries", "03G906021KH_MultiMap_v2.1.0" + ("_INERT" if INERT else "") + ".bin")
 
 # --- configuration (must describe the design, not be copied from the built file)
 R13 = 0x7FFFF0
@@ -44,6 +44,8 @@ DOI_SRC, DOI_END = 0x1DF02E, 0x1DFC5E
 DOI_LEN = DOI_END - DOI_SRC
 DOI_S1, DOI_S2, DOI_TABLE, DOI_THUNK, DOI_STRIDE = 0x1F4000, 0x1F6000, 0x1F3F00, 0x1FC900, 96
 DOI_DISP = {0x00: 0x478, 0x18: 0x47C, 0x20: 0x480, 0x26: 0x484}
+PARAM_BASE = 0x1EA7C8          # v2.1.0: 3 tunable trigger bytes (mask_next, mask_prev, cfg)
+
 DOI_SITES = [
     (0xC5108, 31, 0x00), (0xC53A0, 30, 0x00), (0xC56FC, 12, 0x00),
     (0xC57E8, 12, 0x00), (0xC5AC4, 12, 0x00), (0xC5D50, 12, 0x00),
@@ -158,6 +160,7 @@ class CPU:
             if xo == 32: self._cmp(g[ra], g[rb])
             elif xo == 0: self._cmp(s32(g[ra]), s32(g[rb]))
             elif xo == 316: g[ra] = g[rd] ^ g[rb]
+            elif xo == 28:  g[ra] = g[rd] & g[rb]
             else: raise Fault(f"unimplemented op31 xo={xo} @{pc:#x}")
         else:
             raise Fault(f"unimplemented opcode {op} ({w:#010x}) @{pc:#x}")
@@ -291,7 +294,7 @@ def check_doi(stock, mod):
 
 def main():
     stock, mod = open(STOCK_FILE, "rb").read(), open(MOD_FILE, "rb").read()
-    print(f"=== validate_build v2.0.1 {'(INERT) ' if INERT else ''}===\n stock: {STOCK_FILE}\n built: {MOD_FILE}\n")
+    print(f"=== validate_build v2.1.0 {'(INERT) ' if INERT else ''}===\n stock: {STOCK_FILE}\n built: {MOD_FILE}\n")
     if not check("files are 2 MB", len(stock) == len(mod) == 0x200000): return 1
     for n, a, b in REGIONS: check(f"stock {n} additive sum", asum(stock, a, b) == TARGET)
     for n, a, b in REGIONS: check(f"built {n} additive sum == 0xD01FE500", asum(mod, a, b) == TARGET, f"{asum(mod, a, b):#010x}")
@@ -353,6 +356,7 @@ def main():
     for a in [HOOK_TL, HOOK_READER] + [s for s, _ in HOOK_SOI] + BAL: allowed.update(range(a, a + 4))
     allowed.update(range(DOI_S1, DOI_S1 + DOI_LEN)); allowed.update(range(DOI_S2, DOI_S2 + DOI_LEN))
     allowed.update(range(DOI_TABLE, DOI_TABLE + 16))
+    allowed.update(range(PARAM_BASE, PARAM_BASE + 4))     # v2.1.0 trigger parameters
     for i, (site, reg, off) in enumerate(DOI_SITES):
         allowed.update(range(site, site + 4))
         allowed.update(range(DOI_THUNK + i * DOI_STRIDE, DOI_THUNK + i * DOI_STRIDE + DOI_STRIDE))
@@ -364,55 +368,82 @@ def main():
     check(f"{len(HEADERS)} maps x 2 slots: clone bytes == stock map bytes (size from header)", ok)
     check("SOI clones == stock block (0x1D6414..0x1D82B0)", all(mod[soi[(s, 0)]:soi[(s, 0)] + SOI_LEN] == stock[SOI_STOCK:SOI_STOCK + SOI_LEN] for s in (1, 2)))
 
-    # ---- TL thunk behaviour vs reference model
+    # ---- TL thunk behaviour (v2.1.0: real stalk contacts, tunable masks)
     TW = (THUNK_TL, THUNK_TL + WIN["TL"])
-    states = [KEY, KEY ^ 1, KEY ^ 2, 0, M32, KEY ^ 3, KEY ^ 0x100, (KEY ^ 1) ^ 1, (KEY ^ 2) ^ 0x80000000]
-    bad, n = [], 0
-    for word in states:
-        for last in (0, 1, 0xFF):
-            for ped in (0, 1, 199, 200, 201, 5000, 0x7FFF, 0x8000, 0xFFFF):
-                for sb in range(256):
-                    h.call(THUNK_TL, HOOK_TL + 4, TW, {31: 0x1D1578},
-                           {A_WORD: (4, word), A_LAST: (1, last), A_PEDAL: (2, ped), A_SET: (1, sb)})
-                    n += 1
-                    ew, el, em = model_tl(word, last, sb, ped)
-                    got = (h.m.peek(A_WORD, 4), h.m.peek(A_LAST))
-                    if got != (ew, el) or (em is not None and h.m.peek(A_ACTIVE) != em) or h.c.g[5] != 0x1D1578 + 382:
-                        bad.append((hex(word), last, ped, sb, got)); 
-                        if len(bad) > 3: break
-    check(f"TL thunk == reference model ({n} states: 9 words x 3 latches x 9 pedals x 256 CAN bytes)", not bad, str(bad[:2]))
+    A_TIPS, A_CC = 0x7F9413, 0x7F953A
+    A_SWW, A_MODE = 0x7F9990, 0x7F935D   # the other two MAPS_SRC sources
+    A_LNEXT, A_LPREV = 0x7F9212, 0x7F9213
+    A_DTIP, A_DCC, A_DCNT, A_DFLG = 0x7F9218, 0x7F9219, 0x7F921A, 0x7F921B
+    MASK_NEXT, MASK_PREV = mod[PARAM_BASE], mod[PARAM_BASE + 1]
+    CFG = mod[PARAM_BASE + 2]
+    check("trigger params in erased area: masks and cfg valid",
+          MASK_NEXT and MASK_PREV and MASK_NEXT != MASK_PREV and CFG & 0x03 in (0, 1),
+          f"next={MASK_NEXT:#04x} prev={MASK_PREV:#04x} cfg={CFG:#04x}")
 
-    # stalk semantic tests (independent of the model)
+    states = [KEY, KEY ^ 1, KEY ^ 2, 0, M32, KEY ^ 3, 0x55555555]
+
     def sim(frames, ped=0, word=KEY):
-        h.m.ram[:] = b"\x00" * len(h.m.ram); h.m.poke(A_WORD, 4, word); h.m.poke(A_PEDAL, 2, ped)
+        h.m.ram[:] = b"\x00" * len(h.m.ram)
+        h.m.poke(A_WORD, 4, word); h.m.poke(A_PEDAL, 2, ped)
         out = []
-        for b in frames:
-            h.m.poke(A_SET, 1, b); h.c.g = [0] * 32; h.c.g[13], h.c.g[31], h.c.g[1] = R13, 0x1D1578, 0x7FF800
-            h.c.run(THUNK_TL, HOOK_TL + 4, TW); out.append((h.m.peek(A_WORD, 4) ^ KEY) & M32)
+        for tips, ccs in frames:
+            h.m.poke(A_TIPS, 1, tips); h.m.poke(A_CC, 1, ccs)
+            h.m.poke(A_SWW, 1, tips);  h.m.poke(A_MODE, 1, tips)   # keep all sources in step
+            h.c.g = [0] * 32; h.c.g[13], h.c.g[31], h.c.g[1] = R13, 0x1D1578, 0x7FF800
+            h.c.run(THUNK_TL, HOOK_TL + 4, TW)
+            out.append((h.m.peek(A_WORD, 4) ^ KEY) & M32)
         return out
-    idle = sim([((n & 15) << 4) | 0x0C for n in range(96)])
-    check("stalk untouched + rolling counter (bit7 toggling): slot never changes", set(idle) == {0}, f"slots seen {sorted(set(idle))}")
-    if not INERT:
-        press = sim([0x0C, 0x1C, 0x2D, 0x3D, 0x4C, 0x5D, 0x6D, 0x7C, 0x8D, 0x9D, 0xAC, 0xBD, 0xCC, 0xDD, 0xEC, 0xFD])
-        check("SET (bit0) presses advance 0->1->2->0, one per rising edge, any counter value", press == [0, 0, 1, 1, 1, 2, 2, 2, 0, 0, 0, 1, 1, 2, 2, 0], str(press))
-        check("pedal above gate blocks switching", set(sim([0x0D, 0x0C] * 4, ped=300)) == {0})
-        g1 = sim([0x0D], word=0x55555555)
-        check("garbage state word + press -> clean slot 1", g1 == [1])
-        g2 = sim([0x0C] * 3, word=0x55555555)
-        check("garbage state word, no press: stays invalid (value ^ KEY > 2, so every consumer treats it as stock)", all(x > 2 for x in g2), str(g2))
-    else:
-        check("INERT: SET presses never change the slot", set(sim([0x0D, 0x0C] * 8)) == {0})
 
-    # register / CR contract for the TL thunk
+    if not INERT:
+        idle = sim([(0x00, 0)] * 4 + [(0x3C, 0)] * 4)
+        check("no tip contact: slot never changes", set(idle) == {0}, f"slots seen {sorted(set(idle))}")
+
+        press = sim([(0x00, 0), (MASK_NEXT, 0), (MASK_NEXT, 0), (0x00, 0),
+                     (MASK_NEXT, 0), (0x00, 0), (MASK_NEXT, 0), (0x00, 0)])
+        check("NEXT tip advances 0->1->2->0, one per rising edge", press == [0, 1, 1, 1, 2, 2, 0, 0], str(press))
+
+        back = sim([(0x00, 0), (MASK_PREV, 0), (MASK_PREV, 0), (0x00, 0), (MASK_PREV, 0), (0x00, 0)])
+        check("PREV tip retreats 0->2->1", back == [0, 2, 2, 2, 1, 1], str(back))
+
+        gated = sim([(MASK_NEXT, 1), (0x00, 1), (MASK_NEXT, 1)])
+        check("gate: CC switch state != 0 blocks switching", set(gated) == {0}, str(gated))
+
+        check("pedal above gate blocks switching", set(sim([(MASK_NEXT, 0), (0x00, 0)] * 4, ped=300)) == {0})
+
+        g1 = sim([(MASK_NEXT, 0)], word=0x55555555)
+        check("garbage state word + press -> clean slot 1", g1 == [1])
+    else:
+        check("INERT: tip presses never change the slot", set(sim([(MASK_NEXT, 0), (0x00, 0)] * 8)) == {0})
+
+    # source-selection proof: distinct value per source, then read the diag mirror
+    src_sel = mod[PARAM_BASE + 3]
+    exp = {0: 0xA1, 1: 0xB2, 2: 0xC3}.get(src_sel)
+    if exp is not None and not INERT:
+        h.m.ram[:] = b"\x00" * len(h.m.ram)
+        h.m.poke(A_WORD, 4, KEY); h.m.poke(A_PEDAL, 2, 0); h.m.poke(A_CC, 1, 0)
+        h.m.poke(A_TIPS, 1, 0xA1); h.m.poke(A_SWW, 1, 0xB2); h.m.poke(A_MODE, 1, 0xC3)
+        h.c.g = [0] * 32; h.c.g[13], h.c.g[31], h.c.g[1] = R13, 0x1D1578, 0x7FF800
+        h.c.run(THUNK_TL, HOOK_TL + 4, TW)
+        got = h.m.peek(A_DTIP)
+        check("MAPS_SRC=%d reads its intended byte (diag mirror 0x%02X)" % (src_sel, exp),
+              got == exp, "diag=%02X expected %02X" % (got, exp))
+
+    # register / CR contract + store footprint
     chg, crbad = set(), False
     for _ in range(300):
-        word = h.rnd.choice(states)
-        b0 = h.call(THUNK_TL, HOOK_TL + 4, TW, {31: 0x1D1578}, {A_WORD: (4, word), A_LAST: (1, h.rnd.choice([0, 1])), A_PEDAL: (2, h.rnd.choice([0, 100, 300])), A_SET: (1, h.rnd.getrandbits(8))})
+        word = h.rnd.choice([KEY, KEY ^ 1, KEY ^ 2, 0, M32, 0x55555555])
+        b0 = h.call(THUNK_TL, HOOK_TL + 4, TW, {31: 0x1D1578},
+                    {A_WORD: (4, word), A_LNEXT: (1, h.rnd.choice([0, 1])),
+                     A_LPREV: (1, h.rnd.choice([0, 1])), A_PEDAL: (2, h.rnd.choice([0, 100, 300])),
+                     A_TIPS: (1, h.rnd.getrandbits(8)), A_CC: (1, h.rnd.choice([0, 0, 1, 2, 3]))})
         chg |= {i for i in range(32) if h.c.g[i] != b0[0][i]}
         crbad |= (h.c.cr & 0x0FFFFFFF) != (b0[1] & 0x0FFFFFFF) or (h.c.xer, h.c.ctr, h.c.lr) != (b0[2], b0[3], b0[4])
         stores = {a for k, a, n_ in h.m.log if k == "W"}
-        crbad |= not stores <= {A_ACTIVE, A_LAST, A_WORD, A_WORD + 1, A_WORD + 2, A_WORD + 3}
-    check("TL thunk clobbers only r5,r11,r12 + CR0; LR/CTR/XER/CR1-7 intact; stores only to state", chg <= {5, 11, 12} and not crbad, f"changed r{sorted(chg)}")
+        allowed = {A_ACTIVE, A_WORD, A_WORD + 1, A_WORD + 2, A_WORD + 3,
+                   A_LNEXT, A_LPREV, A_DTIP, A_DCC, A_DCNT, A_DFLG}
+        crbad |= not stores <= allowed
+    check("TL thunk clobbers only r5,r11,r12 + CR0; LR/CTR/XER/CR1-7 intact; stores only to state/diag",
+          chg <= {5, 11, 12} and not crbad, f"changed r{sorted(chg)}")
 
     # ---- reader thunk behaviour
     exp_tbl = {(s, hd): clones[(s, n)] for s in (1, 2) for n, hd in HEADERS}
@@ -430,7 +461,7 @@ def main():
             crbad |= (h.c.cr & 0x0FFFFFFF) != (b0[1] & 0x0FFFFFFF) or (h.c.xer, h.c.ctr, h.c.lr) != (b0[2], b0[3], b0[4])
             if h.c.g[5] != e5 or h.c.g[10] != e10:
                 bad.append((hex(word), hex(r5), hex(h.c.g[5]), hex(e5)))
-    check(f"reader thunk redirects exactly the {len(HEADERS)} headers in slot 1/2, nothing else, stock for slot 0/invalid ({cnt} cases)", not bad, str(bad[:2]))
+    check(f"reader thunk redirects exactly the 14 headers in slot 1/2, nothing else, stock for slot 0/invalid ({cnt} cases)", not bad, str(bad[:2]))
     check("reader thunk: displaced lha replayed with the final r5; only r5,r10,r11,r12 + CR0 touched; CR1-7/LR/CTR/XER intact",
           chg <= {5, 10, 11, 12} and not crbad, f"changed r{sorted(chg)}")
     cmpw_count = sum(1 for a in range(THUNK_READER, THUNK_READER + WIN["READER"], 4) if u32(mod, a) == 0x7C055840)  # 0x7C055840 = cmplw r5,r11

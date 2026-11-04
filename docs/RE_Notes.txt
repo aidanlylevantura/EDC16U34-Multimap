@@ -1,5 +1,5 @@
 ====================================================
-MULTIMAP REVERSE ENGINEERING NOTES (EDC16U34)  -  v2.0.1 current
+MULTIMAP REVERSE ENGINEERING NOTES (EDC16U34)  -  v2.1.0 current
 VAG 03G906021KH / SW 1037382083
 Stock_Baseline.bin = complete read (OS from VAG_BOSCH_EDC16U34_EXT FLASH_20261102134010.bin)
                     + factory calibration (03G906021KH_9245_382083_PD105 Stock.Bin)
@@ -49,7 +49,12 @@ SELECTORS (A2L)
 STATE (r13 = 0x7FFFF0)
   0x7F9214 u32 = 0xA5C35A3C ^ slot  authoritative, single aligned store
   0x7F9210 u8 mirror, 0x7F9211 u8 SET edge latch, 0x7F95C4 s16 pedal
-  0x7FF122 CAN 0x38A byte 2, bit 0 = SET (unconfirmed on hardware)
+  v2.1.0: 0x7F9413 switch-contact byte, bit selected by MAPS_MASK_NEXT/PREV
+          (defaults 0x80 / 0x40), gated on 0x7F953A == 0 via MAPS_CFG bit0.
+          MAPS_SRC at 0x1EA7CB selects the source byte:
+            0 = 0x7F9413 (contacts)   1 = 0x7F9990 high byte (rocker)
+            2 = 0x7F935D (rocker mode)
+          The old 0x7FF122 / CAN 0x38A entry was WRONG - no cruise code reads it.
 
 MEMORY
   free run 0x1EA7C8..0x1FDF73; tail block 0x1FDF74+ untouched
@@ -66,7 +71,7 @@ CHECKSUMS
   chained 136-byte tail blocks unresolved and left unchanged
 
 VALIDATION
-  validate_build.py        69/69 active, 66/66 inert
+  validate_build.py        71/71 active, 65/65 inert (all 3 MAPS_SRC paths)
   validate_doi_path.py     51/51 (Duration pointers resolve into each slot clone)
   builder writes no map data: every map byte equals the source bin
 ====================================================

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-EDC16U34 MultiMap builder v2.0.1  (VAG 03G906021KH / SW 1037382083)
+EDC16U34 MultiMap builder v2.1.0  (VAG 03G906021KH / SW 1037382083)
 
 Usage:  python build_multimap_770022.py [stock.bin] [output.bin] [--inert]
 
@@ -11,7 +11,15 @@ Usage:  python build_multimap_770022.py [stock.bin] [output.bin] [--inert]
 
 No third-party dependencies (own PowerPC encoder; keystone is no longer required).
 
-What changed vs v2.0.0 (all found by static analysis + emulation of the v2.0.0 binary):
+What changed in v2.1.0:
+  * Stalk trigger rebased on the real switch-contact byte 0x7F9413 (sigs 0x156..0x161)
+    instead of 0x7FF122, which is byte 2 of frame 0x7D0 and is not the stalk at all.
+  * Three WinOLS-tunable parameters at 0x1EA7C8: MAPS_MASK_NEXT / MAPS_MASK_PREV /
+    MAPS_CFG, so tip polarity can be determined in the car without a rebuild.
+  * Gated on 0x7F953A == 0 (the firmware's own "cruise off" test at 0x0ACCCC).
+  * Up = mask_next, down = mask_prev, both rising-edge only; CFG bit1 disables.
+
+Earlier history, v2.0.1 vs v2.0.0 (all found by static analysis + emulation of the v2.0.0 binary):
   * Stalk test used rlwinm mask 24,24 (= 0x80, top bit of the rolling counter) -> slot cycled ~3x/s.
     Now bit 0 (31,31).
   * Slot-1 and slot-2 clone ranges overlapped (7 of 15 slot-2 clones corrupted) and the area
@@ -32,10 +40,15 @@ import sys
 # ------------------------------------------------------------------ configuration
 ARGS = [a for a in sys.argv[1:] if not a.startswith("--")]
 INERT = "--inert" in sys.argv
+# --src N overrides the trigger source default (0=0x7F9413, 1=0x7F9990, 2=0x7F935D)
+SRC_OVERRIDE = None
+for _i, _a in enumerate(sys.argv):
+    if _a == "--src" and _i + 1 < len(sys.argv):
+        SRC_OVERRIDE = int(sys.argv[_i + 1], 0)
 HERE = os.path.dirname(os.path.abspath(__file__))
 STOCK_FILE = ARGS[0] if len(ARGS) > 0 else os.path.join(HERE, "..", "binaries", "Stock_Baseline.bin")
 OUTPUT_FILE = ARGS[1] if len(ARGS) > 1 else os.path.join(
-    HERE, "..", "binaries", "03G906021KH_MultiMap_v2.0.1" + ("_INERT" if INERT else "") + ".bin")
+    HERE, "..", "binaries", "03G906021KH_MultiMap_v2.1.0" + ("_INERT" if INERT else "") + ".bin")
 
 # RAM state (all reached r13-relative; r13 = 0x7FFFF0 is set in the boot block and never written by the OS)
 R13 = 0x7FFFF0
@@ -43,9 +56,40 @@ ADDR_ACTIVE_SLOT = 0x7F9210   # informational mirror (0/1/2). NOT used for decis
 ADDR_LAST_STALK = 0x7F9211    # previous SET level (edge latch)
 ADDR_SLOT_WORD = 0x7F9214     # authoritative: KEY32 ^ slot (32-bit, aligned, single store)
 ADDR_PEDAL = 0x7F95C4         # s16, 0.01 % units, 0..10000 (identity = inference, see README)
-ADDR_SET_BYTE = 0x7FF122      # CAN 0x38A payload byte 2, bit 0 = GRA_Neu_Setzen (UNCONFIRMED on hardware)
+ADDR_SET_BYTE = 0x7FF122      # DEPRECATED - byte 2 of frame 0x7D0, not the stalk. Kept for reference.
 KEY32 = 0xA5C35A3C
 PEDAL_MAX = 200               # switching only at pedal <= 200 raw (= 2.00 % if units are 0.01 %)
+
+# ---- trigger (v2.1.0): real stalk contacts, WinOLS-tunable -----------------
+# Verified against SW 1037382083: 0x7F9413 is the switch-contact byte assembled by
+# FUN_000a984c from signals 0x156..0x161.  0x7F953A is the CC switch state, and the
+# firmware's own "is cruise off?" test is (0x7F953A == 0) at 0x0ACCCC.
+ADDR_TIPS      = 0x7F9413     # bit 7 = sig 0x15C, bit 6 = sig 0x15E (inferred tip pair)
+ADDR_CC_STATE  = 0x7F953A     # 2-bit CC switch state; 0 = off
+ADDR_LAST_NEXT = 0x7F9212     # edge latch, next-tip  (0/1)
+ADDR_LAST_PREV = 0x7F9213     # edge latch, prev-tip  (0/1)
+ADDR_DIAG_TIP  = 0x7F9218     # mirror: last raw 0x7F9413
+ADDR_DIAG_CC   = 0x7F9219     # mirror: last raw 0x7F953A
+ADDR_DIAG_CNT  = 0x7F921A     # mirror: triggers fired this session
+ADDR_DIAG_FLG  = 0x7F921B     # mirror: bit0 = gate passed
+
+# 3 tunable bytes in verified-erased filler (stock = FF FF FF).
+PARAM_BASE     = 0x1EA7C8
+ADDR_MASK_NEXT = PARAM_BASE + 0   # bit of 0x7F9413 that means "next map"
+ADDR_MASK_PREV = PARAM_BASE + 1   # bit that means "previous map"
+ADDR_MAPS_CFG  = PARAM_BASE + 2   # bit0: 1 = only while CC is off ; bit1: 1 = disable
+ADDR_MAPS_SRC  = PARAM_BASE + 3   # which byte the masks read (see DEF_MAPS_SRC)
+# NOTE: if MASK_NEXT == MASK_PREV both edges fire in the same call and the slot
+# advances +1 then +2, i.e. +3 mod 3 = no change. Harmless, but while testing
+# always give the two masks different bits.
+DEF_MASK_NEXT  = 0x80
+DEF_MASK_PREV  = 0x40
+DEF_MAPS_CFG   = 0x01         # gate ON, triggers enabled
+DEF_MAPS_SRC   = 0x00         # 0 = 0x7F9413 contact byte
+                              # 1 = 0x7F9990 high byte (rocker bits 8/9/14 -> masks 01/02/40)
+                              # 2 = 0x7F935D mode byte (decoded rocker position)
+ADDR_SWITCH_WORD = 0x7F9990   # 16-bit raw switch word, high byte holds bits 8..15
+ADDR_MODE_BYTE   = 0x7F935D   # decoded rocker mode: 1,2,3,5,7
 
 # 2D map headers that the reader hook redirects (r5 == header address at entry of 0xF94DC).
 # Duration maps are NOT here: they are reached through the DOI block (0x1DF054 + offsets),
@@ -112,6 +156,7 @@ def cmplwi(ra, i): return (10 << 26) | (ra << 16) | (i & 0xFFFF)
 def cmpwi(ra, i): return (11 << 26) | (ra << 16) | (i & 0xFFFF)
 def cmplw(ra, rb): return (31 << 26) | (ra << 16) | (rb << 11) | (32 << 1)
 def xor_(ra, rs, rb): return (31 << 26) | (rs << 21) | (ra << 16) | (rb << 11) | (316 << 1)
+def and_(ra, rs, rb): return (31 << 26) | (rs << 21) | (ra << 16) | (rb << 11) | (28 << 1)
 def rlwinm(ra, rs, sh, mb, me, rc=0): return (21 << 26) | (rs << 21) | (ra << 16) | (sh << 11) | (mb << 6) | (me << 1) | rc
 def stwu(rs, ra, d): return _d(37, rs, ra, d)
 def add(ra, rs, rb): return (31 << 26) | (rs << 21) | (ra << 16) | (rb << 11) | (266 << 1)
@@ -167,22 +212,78 @@ def slot_to_r(a, r):
 
 # ------------------------------------------------------------------ thunks
 def tl_thunk(displaced):
+    """Stalk trigger.
+
+    Reads the real switch-contact byte 0x7F9413 and, when the gate allows it,
+    advances (+) or retreats (-) the slot on a rising edge of the configured
+    contact bit.  Both masks are flash parameters so the tip polarity can be
+    determined in the car without rebuilding.
+    """
     a = Asm(THUNK_TL); E = a.e
+
+    def load_src(reg, tag):
+        """reg = one byte from the selected source (MAPS_SRC)."""
+        E(lis(12, hi(ADDR_MAPS_SRC))); E(ori(12, 12, lo(ADDR_MAPS_SRC))); E(lbz(12, 12, 0))
+        E(cmpwi(12, 1)); a.bc(BEQ, "s%s1" % tag)
+        E(cmpwi(12, 2)); a.bc(BEQ, "s%s2" % tag)
+        E(lbz(reg, 13, disp(ADDR_TIPS))); a.b("s%sd" % tag)
+        a.L("s%s1" % tag); E(lbz(reg, 13, disp(ADDR_SWITCH_WORD))); a.b("s%sd" % tag)
+        a.L("s%s2" % tag); E(lbz(reg, 13, disp(ADDR_MODE_BYTE)))
+        a.L("s%sd" % tag)
     E(lha(12, 13, disp(ADDR_PEDAL))); E(cmplwi(12, PEDAL_MAX)); a.bc(BGT, "orig")     # signed negatives -> huge -> blocked
     if INERT:
         E(li(12, 0))
+        E(stb(12, 13, disp(ADDR_LAST_NEXT))); E(stb(12, 13, disp(ADDR_LAST_PREV)))
+        a.b("orig")
     else:
-        E(lbz(12, 13, disp(ADDR_SET_BYTE)))
-    E(rlwinm(12, 12, 0, 31, 31, rc=1)); a.bc(BEQ, "released")                       # bit 0 = SET
-    E(lbz(12, 13, disp(ADDR_LAST_STALK))); E(cmpwi(12, 0)); a.bc(BNE, "orig")         # rising edge only
-    E(li(12, 1)); E(stb(12, 13, disp(ADDR_LAST_STALK)))
-    slot_to_r(a, 12)
-    E(cmplwi(12, 2)); a.bc(BLE, "valid"); E(li(12, 0))                               # invalid state -> stock
-    a.L("valid"); E(addi(12, 12, 1)); E(cmplwi(12, 3)); a.bc(BLT, "store"); E(li(12, 0))
-    a.L("store"); E(stb(12, 13, disp(ADDR_ACTIVE_SLOT)))
-    E(lis(11, KH)); E(ori(11, 11, KL)); E(xor_(11, 11, 12)); E(stw(11, 13, disp(ADDR_SLOT_WORD)))  # one atomic store
-    a.b("orig")
-    a.L("released"); E(li(12, 0)); E(stb(12, 13, disp(ADDR_LAST_STALK)))
+        # ---- kill switch: MAPS_CFG bit 1
+        E(lis(12, hi(ADDR_MAPS_CFG))); E(ori(12, 12, lo(ADDR_MAPS_CFG))); E(lbz(12, 12, 0))
+        E(rlwinm(12, 12, 0, 30, 30, rc=1)); a.bc(BNE, "clear")
+        # ---- gate: MAPS_CFG bit 0 -> only while the CC switch state is 0 (off)
+        E(lis(12, hi(ADDR_MAPS_CFG))); E(ori(12, 12, lo(ADDR_MAPS_CFG))); E(lbz(12, 12, 0))
+        E(rlwinm(12, 12, 0, 31, 31, rc=1)); a.bc(BEQ, "nogate")
+        E(lbz(11, 13, disp(ADDR_CC_STATE))); E(stb(11, 13, disp(ADDR_DIAG_CC)))
+        E(cmpwi(11, 0)); a.bc(BNE, "clear")
+        E(li(12, 1)); E(stb(12, 13, disp(ADDR_DIAG_FLG))); a.b("srcsel")
+        a.L("nogate"); E(li(12, 0)); E(stb(12, 13, disp(ADDR_DIAG_FLG)))
+        a.L("srcsel")
+        load_src(11, "a"); E(stb(11, 13, disp(ADDR_DIAG_TIP)))
+
+        # ---- NEXT (+1)
+        E(lis(12, hi(ADDR_MASK_NEXT))); E(ori(12, 12, lo(ADDR_MASK_NEXT))); E(lbz(12, 12, 0))
+        E(and_(12, 11, 12)); E(cmpwi(12, 0)); a.bc(BEQ, "relnext")
+        E(lbz(12, 13, disp(ADDR_LAST_NEXT))); E(cmpwi(12, 0)); a.bc(BNE, "done")
+        E(li(12, 1)); E(stb(12, 13, disp(ADDR_LAST_NEXT)))
+        slot_to_r(a, 12)
+        E(cmplwi(12, 2)); a.bc(BLE, "vn"); E(li(12, 0))
+        a.L("vn"); E(addi(12, 12, 1)); E(cmplwi(12, 3)); a.bc(BLT, "sn"); E(li(12, 0))
+        a.L("sn"); E(stb(12, 13, disp(ADDR_ACTIVE_SLOT)))
+        E(lis(11, KH)); E(ori(11, 11, KL)); E(xor_(11, 11, 12)); E(stw(11, 13, disp(ADDR_SLOT_WORD)))
+        E(lbz(12, 13, disp(ADDR_DIAG_CNT))); E(addi(12, 12, 1)); E(stb(12, 13, disp(ADDR_DIAG_CNT)))
+        a.b("done")
+        a.L("relnext"); E(li(12, 0)); E(stb(12, 13, disp(ADDR_LAST_NEXT)))
+
+        # ---- PREV (-1)
+        a.L("done")
+        load_src(11, "b")
+        E(lis(12, hi(ADDR_MASK_PREV))); E(ori(12, 12, lo(ADDR_MASK_PREV))); E(lbz(12, 12, 0))
+        E(and_(12, 11, 12)); E(cmpwi(12, 0)); a.bc(BEQ, "relprev")
+        E(lbz(12, 13, disp(ADDR_LAST_PREV))); E(cmpwi(12, 0)); a.bc(BNE, "orig")
+        E(li(12, 1)); E(stb(12, 13, disp(ADDR_LAST_PREV)))
+        slot_to_r(a, 12)
+        E(cmplwi(12, 2)); a.bc(BLE, "vp"); E(li(12, 0))
+        a.L("vp"); E(addi(12, 12, 2)); E(cmplwi(12, 3)); a.bc(BLT, "sp"); E(addi(12, 12, -3))
+        a.L("sp"); E(stb(12, 13, disp(ADDR_ACTIVE_SLOT)))
+        E(lis(11, KH)); E(ori(11, 11, KL)); E(xor_(11, 11, 12)); E(stw(11, 13, disp(ADDR_SLOT_WORD)))
+        E(lbz(12, 13, disp(ADDR_DIAG_CNT))); E(addi(12, 12, 1)); E(stb(12, 13, disp(ADDR_DIAG_CNT)))
+        a.b("orig")
+        a.L("relprev"); E(li(12, 0)); E(stb(12, 13, disp(ADDR_LAST_PREV)))
+        a.b("orig")
+
+        # ---- gate/kill blocked: drop the latches so a later press is a fresh edge
+        a.L("clear")
+        E(li(12, 0)); E(stb(12, 13, disp(ADDR_DIAG_FLG)))
+        E(stb(12, 13, disp(ADDR_LAST_NEXT))); E(stb(12, 13, disp(ADDR_LAST_PREV)))
     a.L("orig"); E(displaced); a.b(HOOK_TL + 4)
     return a.done()
 
@@ -342,6 +443,11 @@ def main():
     d[HOOK_READER:HOOK_READER + 4] = b_insn(HOOK_READER, THUNK_READER)
     for i, (site, _) in enumerate(HOOK_SOI):
         d[site:site + 4] = b_insn(site, THUNK_SOI[i])
+    # ---- trigger parameters (WinOLS-tunable, in verified-erased filler)
+    assert FREE_LO <= PARAM_BASE and PARAM_BASE + 4 <= FREE_HI, "parameter area outside free run"
+    assert stock[PARAM_BASE:PARAM_BASE + 4] == b"\xFF" * 4, "parameter area is not erased in stock"
+    _src = DEF_MAPS_SRC if SRC_OVERRIDE is None else SRC_OVERRIDE
+    d[PARAM_BASE:PARAM_BASE + 4] = bytes([DEF_MASK_NEXT, DEF_MASK_PREV, DEF_MAPS_CFG, _src])
     fix_checksums(d)
     open(OUTPUT_FILE, "wb").write(d)
 
